@@ -15,6 +15,7 @@ import { SearchBar } from "./SearchBar";
 import { ShortcutsHelp } from "./ShortcutsHelp";
 import { IntegrationsPanel } from "./IntegrationsPanel";
 import { MemoryPanel } from "./MemoryPanel";
+import { ChatPlannerPanel } from "./ChatPlannerPanel";
 import { SkillsLibrary } from "../skills/SkillsLibrary";
 import { AnalyticsPanel } from "../analytics/AnalyticsPanel";
 import { Button } from "@/components/ui/button";
@@ -65,6 +66,7 @@ export function Board() {
   const [skillsOpen, setSkillsOpen] = useState(false);
   const [selectedSkill, setSelectedSkill] = useState<Skill | null>(null);
   const [analyticsOpen, setAnalyticsOpen] = useState(false);
+  const [chatPlannerOpen, setChatPlannerOpen] = useState(false);
 
   const handleUseSkill = useCallback((skill: Skill) => {
     setSelectedSkill(skill);
@@ -279,6 +281,13 @@ export function Board() {
             Clear Done
           </Button>
           <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setChatPlannerOpen(true)}
+          >
+            Chat Planner
+          </Button>
+          <Button
             variant={analyticsOpen ? "default" : "outline"}
             size="sm"
             onClick={() => setAnalyticsOpen(!analyticsOpen)}
@@ -335,6 +344,7 @@ export function Board() {
       <IntegrationsPanel open={integrationsOpen} onOpenChange={setIntegrationsOpen} />
       <MemoryPanel boardId={boardId} open={memoryOpen} onOpenChange={setMemoryOpen} />
       <SkillsLibrary open={skillsOpen} onOpenChange={setSkillsOpen} onUseSkill={handleUseSkill} />
+      <ChatPlannerPanel boardId={boardId} open={chatPlannerOpen} onOpenChange={setChatPlannerOpen} />
 
       {analyticsOpen && <AnalyticsPanel boardId={boardId} />}
 
