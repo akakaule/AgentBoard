@@ -67,6 +67,7 @@ export function Board() {
   const [selectedSkill, setSelectedSkill] = useState<Skill | null>(null);
   const [analyticsOpen, setAnalyticsOpen] = useState(false);
   const [chatPlannerOpen, setChatPlannerOpen] = useState(false);
+  const [importingIssues, setImportingIssues] = useState(false);
 
   const handleUseSkill = useCallback((skill: Skill) => {
     setSelectedSkill(skill);
@@ -212,6 +213,28 @@ export function Board() {
     [queryClient]
   );
 
+  const handleImportIssues = useCallback(async () => {
+    setImportingIssues(true);
+    try {
+      const res = await fetch("/api/issues/import", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ boardId, limit: 50 }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || "Issue import failed");
+      }
+      const result = await res.json();
+      toast.success(`Imported ${result.imported} issues (${result.provider})`);
+      queryClient.invalidateQueries({ queryKey: ["tasks", boardId] });
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to import issues");
+    } finally {
+      setImportingIssues(false);
+    }
+  }, [boardId, queryClient]);
+
   // Keyboard shortcuts
   const handleToggleDispatcher = useCallback(async () => {
     try {
@@ -264,6 +287,14 @@ export function Board() {
             onClick={() => fileInputRef.current?.click()}
           >
             Import
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleImportIssues}
+            disabled={importingIssues}
+          >
+            {importingIssues ? "Importing..." : "Import Issues"}
           </Button>
           <input
             ref={fileInputRef}

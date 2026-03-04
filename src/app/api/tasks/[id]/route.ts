@@ -8,6 +8,7 @@ import {
   cleanupWorktree,
   detectProvider,
 } from "@/lib/git-operations";
+import { syncLinkedIssueForTask } from "@/lib/issue-sync";
 
 const updateTaskSchema = z.object({
   title: z.string().min(1).optional(),
@@ -114,6 +115,10 @@ export async function PATCH(
         }),
       },
     });
+
+    if (rest.status && rest.status !== currentTask.status) {
+      syncLinkedIssueForTask(task).catch(() => {});
+    }
 
     emitEvent({ type: "task:updated", taskId: task.id });
     return NextResponse.json(task);

@@ -10,9 +10,16 @@ import {
   createWorktreeForTask,
   commitAndPush,
   createPullRequest,
+  mergePullRequest,
+  cleanupWorktree,
   cleanupOrphanedWorktrees,
   detectProvider,
 } from "./git-operations";
+import {
+  buildIssueReferenceFooter,
+  linkPullRequestToIssue,
+  syncLinkedIssueForTask,
+} from "./issue-sync";
 
 const POLL_INTERVAL = 5000;
 
@@ -274,6 +281,10 @@ Work in the current directory: ${workDir}`;
         if (completedTask?.worktreePath && completedTask.branchName && board?.repoPath) {
           try {
             const provider = detectProvider(board.repoPath, board.gitProvider || undefined);
+            const issueFooter = await buildIssueReferenceFooter(
+              completedTask,
+              provider
+            );
             commitAndPush(
               completedTask.worktreePath,
               completedTask.branchName,
@@ -282,10 +293,18 @@ Work in the current directory: ${workDir}`;
             prUrl = createPullRequest(
               completedTask.worktreePath,
               task.title,
-              `Automated PR created by AgentBoard.\n\nTask: ${task.title}\n${task.description || ""}`,
+              `Automated PR created by AgentBoard.\n\nTask: ${task.title}\n${task.description || ""}${issueFooter}`,
               board.baseBranch || "main",
               provider
             );
+            try {
+              await linkPullRequestToIssue(completedTask, prUrl, {
+                repoPath: board.repoPath,
+                gitProvider: board.gitProvider || "",
+              });
+            } catch {
+              // Best-effort issue comment
+            }
             await prisma.taskLog.create({
               data: { taskId, stream: "system", content: `PR created: ${prUrl}` },
             });
@@ -298,9 +317,25 @@ Work in the current directory: ${workDir}`;
           }
         }
 
-        // If the task has a worktree and a PR, always send to review
-        const finalStatus = (needsApproval || prUrl) ? "review" : "done";
-        await prisma.task.update({
+        // Auto-merge if no approval required; otherwise send to review
+        let finalStatus: string = needsApproval ? "review" : "done";
+        if (!needsApproval && prUrl && completedTask?.worktreePath && completedTask.branchName && board?.repoPath) {
+          try {
+            const provider = detectProvider(board.repoPath, board.gitProvider || undefined);
+            mergePullRequest(prUrl, board.repoPath, provider);
+            cleanupWorktree(board.repoPath, completedTask.worktreePath, completedTask.branchName);
+            await prisma.taskLog.create({
+              data: { taskId, stream: "system", content: `PR auto-merged: ${prUrl}` },
+            });
+          } catch (err) {
+            const errMsg = err instanceof Error ? err.message : "Auto-merge failed";
+            await prisma.taskLog.create({
+              data: { taskId, stream: "system", content: `Auto-merge failed, sending to review: ${errMsg}` },
+            });
+            finalStatus = "review"; // fall back so user can handle manually
+          }
+        }
+        const updatedTask = await prisma.task.update({
           where: { id: taskId },
           data: {
             status: finalStatus,
@@ -312,6 +347,7 @@ Work in the current directory: ${workDir}`;
             ...(prUrl && { prUrl }),
           },
         });
+        syncLinkedIssueForTask(updatedTask).catch(() => {});
         emitEvent({ type: "task:updated", taskId });
 
         // Fire outbound integrations
@@ -339,7 +375,7 @@ Work in the current directory: ${workDir}`;
           currentTask.retryCount < currentTask.maxRetries
         ) {
           // Auto-retry
-          await prisma.task.update({
+          const retriedTask = await prisma.task.update({
             where: { id: taskId },
             data: {
               status: "todo",
@@ -351,8 +387,9 @@ Work in the current directory: ${workDir}`;
               costEstimate: usage.costEstimate,
             },
           });
+          syncLinkedIssueForTask(retriedTask).catch(() => {});
         } else {
-          await prisma.task.update({
+          const failedTask = await prisma.task.update({
             where: { id: taskId },
             data: {
               status: "failed",
@@ -363,6 +400,7 @@ Work in the current directory: ${workDir}`;
               costEstimate: usage.costEstimate,
             },
           });
+          syncLinkedIssueForTask(failedTask).catch(() => {});
 
           // Fire outbound integrations for failure
           fireIntegrations("task:failed", {
