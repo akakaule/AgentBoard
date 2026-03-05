@@ -15,6 +15,7 @@ import {
   cleanupOrphanedWorktrees,
   detectProvider,
 } from "./git-operations";
+import { getWorktreePool } from "./worktree-pool";
 import {
   buildIssueReferenceFooter,
   linkPullRequestToIssue,
@@ -43,6 +44,9 @@ class AgentDispatcher {
     this.pollTimer = setInterval(() => this.poll(), POLL_INTERVAL);
     this.poll(); // immediate first poll
 
+    // Pre-allocate worktree pool
+    getWorktreePool().initialize().catch(() => {});
+
     // Start task scheduler
     getScheduler().start();
 
@@ -55,6 +59,9 @@ class AgentDispatcher {
       clearInterval(this.pollTimer);
       this.pollTimer = null;
     }
+
+    // Drain worktree pool
+    getWorktreePool().drain().catch(() => {});
 
     // Stop task scheduler
     getScheduler().stop();
@@ -184,11 +191,20 @@ class AgentDispatcher {
     // If board has a repoPath and task doesn't override with repoUrl, create a worktree
     if (board?.repoPath && !task.repoUrl) {
       try {
-        const result = createWorktreeForTask(
+        // Try pool first for instant startup, fall back to on-demand creation
+        const baseBranch = board.baseBranch || "main";
+        const poolResult = getWorktreePool().lease(
+          task.boardId,
           board.repoPath,
           taskId,
           task.title,
-          board.baseBranch || "main"
+          baseBranch
+        );
+        const result = poolResult ?? createWorktreeForTask(
+          board.repoPath,
+          taskId,
+          task.title,
+          baseBranch
         );
         workDir = result.worktreePath;
         worktreePath = result.worktreePath;

@@ -7,6 +7,7 @@ import {
   closePullRequest,
   cleanupWorktree,
   detectProvider,
+  excludeFilesFromBranch,
 } from "@/lib/git-operations";
 import { syncLinkedIssueForTask } from "@/lib/issue-sync";
 
@@ -30,6 +31,7 @@ const updateTaskSchema = z.object({
   scheduledFor: z.string().nullable().optional(),
   cronExpression: z.string().optional(),
   recurring: z.boolean().optional(),
+  excludedFiles: z.array(z.string()).optional(),
 });
 
 export async function GET(
@@ -51,7 +53,7 @@ export async function PATCH(
   const { id } = await params;
   try {
     const body = await request.json();
-    const { scheduledFor, ...rest } = updateTaskSchema.parse(body);
+    const { scheduledFor, excludedFiles, ...rest } = updateTaskSchema.parse(body);
 
     // Fetch current task to detect status transitions
     const currentTask = await prisma.task.findUnique({ where: { id } });
@@ -63,11 +65,18 @@ export async function PATCH(
     if (currentTask.status === "review" && rest.status === "done" && currentTask.prUrl) {
       const board = await prisma.board.findUnique({
         where: { id: currentTask.boardId },
-        select: { repoPath: true, gitProvider: true },
+        select: { repoPath: true, baseBranch: true, gitProvider: true },
       });
       if (board?.repoPath) {
         try {
           const provider = detectProvider(board.repoPath, board.gitProvider || undefined);
+
+          // Exclude files from branch before merging if requested
+          if (excludedFiles && excludedFiles.length > 0 && currentTask.worktreePath && currentTask.branchName) {
+            const baseBranch = board.baseBranch || "main";
+            excludeFilesFromBranch(currentTask.worktreePath, currentTask.branchName, baseBranch, excludedFiles);
+          }
+
           mergePullRequest(currentTask.prUrl, board.repoPath, provider);
           // Clean up worktree after successful merge
           if (currentTask.worktreePath) {

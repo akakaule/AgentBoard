@@ -4,7 +4,7 @@ import path from "path";
 export type GitProvider = "github" | "azuredevops";
 
 /** Slugify a task title into a safe branch name segment */
-function slugify(text: string): string {
+export function slugify(text: string): string {
   return text
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
@@ -24,7 +24,7 @@ function run(cmd: string, cwd: string, timeout = 30000): string {
 }
 
 /** Run a git command in the given directory */
-function git(args: string, cwd: string, timeout = 30000): string {
+export function git(args: string, cwd: string, timeout = 30000): string {
   return run(`git ${args}`, cwd, timeout);
 }
 
@@ -494,6 +494,48 @@ export function getWorktreeDiff(
       return "";
     }
   }
+}
+
+/**
+ * Exclude files from a branch before merging.
+ * Reverts excluded files to their base-branch state, amends the commit,
+ * and force-pushes so the PR reflects the reduced changeset.
+ */
+export function excludeFilesFromBranch(
+  worktreePath: string,
+  branchName: string,
+  baseBranch: string,
+  excludedFiles: string[]
+): void {
+  if (excludedFiles.length === 0) return;
+
+  // Determine the base ref
+  let baseRef = `origin/${baseBranch}`;
+  try {
+    git(`rev-parse --verify "${baseRef}"`, worktreePath);
+  } catch {
+    baseRef = baseBranch;
+  }
+
+  for (const file of excludedFiles) {
+    // Sanitize file path to prevent injection
+    const safeFile = file.replace(/"/g, "");
+    try {
+      // Restore file to base-branch state
+      git(`checkout "${baseRef}" -- "${safeFile}"`, worktreePath);
+    } catch {
+      // File might be new (doesn't exist on base) — remove it
+      try {
+        git(`rm -f "${safeFile}"`, worktreePath);
+      } catch {
+        // File already gone
+      }
+    }
+  }
+
+  git("add -A", worktreePath);
+  git('commit --amend --no-edit', worktreePath);
+  git(`push --force-with-lease origin "${branchName}"`, worktreePath, 60000);
 }
 
 // ── Helpers ────────────────────────────────────────────────────────

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   Dialog,
@@ -16,6 +16,8 @@ interface GitDiffViewerProps {
   taskId: string;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  reviewMode?: boolean;
+  onApproveWithSelection?: (excludedFiles: string[]) => void;
 }
 
 interface DiffFile {
@@ -76,6 +78,11 @@ function parseDiffFiles(diff: string): DiffFile[] {
   return files;
 }
 
+function extractFilename(header: string): string {
+  const match = header.match(/diff --git a\/(.+?) b\//);
+  return match ? match[1] : header;
+}
+
 function DiffLine({ line }: { line: string }) {
   let className = "whitespace-pre font-mono text-xs leading-5 px-2";
   if (line.startsWith("+")) {
@@ -97,24 +104,47 @@ function DiffLine({ line }: { line: string }) {
   return <div className={className}>{line || " "}</div>;
 }
 
-function FileSection({ file }: { file: DiffFile }) {
+function FileSection({
+  file,
+  reviewMode,
+  selected,
+  onToggle,
+}: {
+  file: DiffFile;
+  reviewMode?: boolean;
+  selected?: boolean;
+  onToggle?: () => void;
+}) {
   const [collapsed, setCollapsed] = useState(false);
-
-  // Extract filename from header
-  const match = file.header.match(/diff --git a\/(.+?) b\//);
-  const filename = match ? match[1] : file.header;
+  const filename = extractFilename(file.header);
 
   return (
-    <div className="mb-4 overflow-hidden rounded-md border border-border">
-      <button
-        className="flex w-full items-center gap-2 bg-muted/50 px-3 py-2 text-left text-xs font-medium hover:bg-muted"
-        onClick={() => setCollapsed(!collapsed)}
-      >
-        <span className="text-muted-foreground">
-          {collapsed ? "+" : "-"}
-        </span>
-        <span className="font-mono">{filename}</span>
-      </button>
+    <div
+      className={`mb-4 overflow-hidden rounded-md border border-border ${
+        reviewMode && !selected ? "opacity-40" : ""
+      }`}
+    >
+      <div className="flex items-center bg-muted/50 hover:bg-muted">
+        {reviewMode && (
+          <label className="flex items-center pl-3" onClick={(e) => e.stopPropagation()}>
+            <input
+              type="checkbox"
+              checked={selected}
+              onChange={onToggle}
+              className="h-3.5 w-3.5 cursor-pointer rounded border-muted-foreground accent-green-500"
+            />
+          </label>
+        )}
+        <button
+          className="flex flex-1 items-center gap-2 px-3 py-2 text-left text-xs font-medium"
+          onClick={() => setCollapsed(!collapsed)}
+        >
+          <span className="text-muted-foreground">
+            {collapsed ? "+" : "-"}
+          </span>
+          <span className="font-mono">{filename}</span>
+        </button>
+      </div>
       {!collapsed && (
         <div className="overflow-x-auto">
           {file.header.split("\n").slice(1).map((line, i) => (
@@ -135,6 +165,8 @@ export function GitDiffViewer({
   taskId,
   open,
   onOpenChange,
+  reviewMode,
+  onApproveWithSelection,
 }: GitDiffViewerProps) {
   const { data, isLoading, error } = useQuery({
     queryKey: ["diff", taskId],
@@ -151,6 +183,26 @@ export function GitDiffViewer({
     return parseDiffFiles(data.diff);
   }, [data?.diff]);
 
+  // Track which files are selected (included). All selected by default.
+  const [selectedFiles, setSelectedFiles] = useState<Set<string>>(new Set());
+
+  // Reset selection when files change
+  useMemo(() => {
+    setSelectedFiles(new Set(files.map((f) => extractFilename(f.header))));
+  }, [files]);
+
+  const toggleFile = useCallback((filename: string) => {
+    setSelectedFiles((prev) => {
+      const next = new Set(prev);
+      if (next.has(filename)) {
+        next.delete(filename);
+      } else {
+        next.add(filename);
+      }
+      return next;
+    });
+  }, []);
+
   const handleCopy = () => {
     if (data?.diff) {
       navigator.clipboard.writeText(data.diff);
@@ -158,20 +210,44 @@ export function GitDiffViewer({
     }
   };
 
+  const handleApprove = () => {
+    if (!onApproveWithSelection) return;
+    const allFilenames = files.map((f) => extractFilename(f.header));
+    const excluded = allFilenames.filter((f) => !selectedFiles.has(f));
+    onApproveWithSelection(excluded);
+  };
+
+  const allSelected = files.length > 0 && selectedFiles.size === files.length;
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-h-[80vh] max-w-3xl">
         <DialogHeader>
           <DialogTitle className="flex items-center justify-between">
             <span>Git Diff</span>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={handleCopy}
-              disabled={!data?.diff}
-            >
-              Copy
-            </Button>
+            <div className="flex items-center gap-2">
+              {reviewMode && onApproveWithSelection && files.length > 0 && (
+                <Button
+                  variant="default"
+                  size="sm"
+                  onClick={handleApprove}
+                  className="bg-green-600 hover:bg-green-700"
+                  disabled={selectedFiles.size === 0}
+                >
+                  {allSelected
+                    ? "Approve All"
+                    : `Approve Selected (${selectedFiles.size}/${files.length})`}
+                </Button>
+              )}
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleCopy}
+                disabled={!data?.diff}
+              >
+                Copy
+              </Button>
+            </div>
           </DialogTitle>
         </DialogHeader>
 
@@ -200,9 +276,18 @@ export function GitDiffViewer({
             </div>
           )}
 
-          {files.map((file, i) => (
-            <FileSection key={i} file={file} />
-          ))}
+          {files.map((file, i) => {
+            const filename = extractFilename(file.header);
+            return (
+              <FileSection
+                key={i}
+                file={file}
+                reviewMode={reviewMode}
+                selected={selectedFiles.has(filename)}
+                onToggle={() => toggleFile(filename)}
+              />
+            );
+          })}
 
           {/* Show raw diff if parsing produced no files but diff text exists */}
           {data?.diff && files.length === 0 && !data.error && (
