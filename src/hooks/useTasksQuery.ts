@@ -155,6 +155,7 @@ export function useUpdateTask() {
       scheduledFor?: string | null;
       cronExpression?: string;
       recurring?: boolean;
+      excludedFiles?: string[];
     }) => {
       const res = await fetch(`/api/tasks/${id}`, {
         method: "PATCH",
@@ -249,7 +250,7 @@ export function useSettings() {
     queryFn: async () => {
       const res = await fetch("/api/settings");
       if (!res.ok) throw new Error("Failed to fetch settings");
-      return res.json() as Promise<{ maxConcurrent: number }>;
+      return res.json() as Promise<{ maxConcurrent: number; editorCommand: string }>;
     },
   });
 }

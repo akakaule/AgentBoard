@@ -15,6 +15,7 @@ import { SearchBar } from "./SearchBar";
 import { ShortcutsHelp } from "./ShortcutsHelp";
 import { IntegrationsPanel } from "./IntegrationsPanel";
 import { MemoryPanel } from "./MemoryPanel";
+import { ChatPlannerPanel } from "./ChatPlannerPanel";
 import { SkillsLibrary } from "../skills/SkillsLibrary";
 import { AnalyticsPanel } from "../analytics/AnalyticsPanel";
 import { Button } from "@/components/ui/button";
@@ -65,6 +66,8 @@ export function Board() {
   const [skillsOpen, setSkillsOpen] = useState(false);
   const [selectedSkill, setSelectedSkill] = useState<Skill | null>(null);
   const [analyticsOpen, setAnalyticsOpen] = useState(false);
+  const [chatPlannerOpen, setChatPlannerOpen] = useState(false);
+  const [importingIssues, setImportingIssues] = useState(false);
 
   const handleUseSkill = useCallback((skill: Skill) => {
     setSelectedSkill(skill);
@@ -210,6 +213,28 @@ export function Board() {
     [queryClient]
   );
 
+  const handleImportIssues = useCallback(async () => {
+    setImportingIssues(true);
+    try {
+      const res = await fetch("/api/issues/import", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ boardId, limit: 50 }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || "Issue import failed");
+      }
+      const result = await res.json();
+      toast.success(`Imported ${result.imported} issues (${result.provider})`);
+      queryClient.invalidateQueries({ queryKey: ["tasks", boardId] });
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to import issues");
+    } finally {
+      setImportingIssues(false);
+    }
+  }, [boardId, queryClient]);
+
   // Keyboard shortcuts
   const handleToggleDispatcher = useCallback(async () => {
     try {
@@ -263,6 +288,14 @@ export function Board() {
           >
             Import
           </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleImportIssues}
+            disabled={importingIssues}
+          >
+            {importingIssues ? "Importing..." : "Import Issues"}
+          </Button>
           <input
             ref={fileInputRef}
             type="file"
@@ -277,6 +310,13 @@ export function Board() {
             disabled={clearDoneTasks.isPending || doneCount === 0}
           >
             Clear Done
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setChatPlannerOpen(true)}
+          >
+            Chat Planner
           </Button>
           <Button
             variant={analyticsOpen ? "default" : "outline"}
@@ -335,6 +375,7 @@ export function Board() {
       <IntegrationsPanel open={integrationsOpen} onOpenChange={setIntegrationsOpen} />
       <MemoryPanel boardId={boardId} open={memoryOpen} onOpenChange={setMemoryOpen} />
       <SkillsLibrary open={skillsOpen} onOpenChange={setSkillsOpen} onUseSkill={handleUseSkill} />
+      <ChatPlannerPanel boardId={boardId} open={chatPlannerOpen} onOpenChange={setChatPlannerOpen} />
 
       {analyticsOpen && <AnalyticsPanel boardId={boardId} />}
 

@@ -206,14 +206,31 @@ export function TaskCardDetail({
     });
   };
 
-  const handleApprove = () => {
+  const handleApprove = (excludedFiles?: string[]) => {
     updateTask.mutate(
-      { id: task.id, status: "done" },
+      {
+        id: task.id,
+        status: "done",
+        ...(excludedFiles && excludedFiles.length > 0 && { excludedFiles }),
+      },
       {
         onSuccess: () => toast.success(task.prUrl ? "Task approved & PR merged" : "Task approved"),
         onError: (err) => toast.error(err.message || "Failed to approve task"),
       }
     );
+  };
+
+  const handleOpenEditor = () => {
+    fetch(`/api/tasks/${task.id}/open-editor`, { method: "POST" })
+      .then(async (res) => {
+        if (res.ok) {
+          toast.success("Opening in editor...");
+        } else {
+          const data = await res.json().catch(() => ({}));
+          toast.error(data.error || "Failed to open editor");
+        }
+      })
+      .catch(() => toast.error("Failed to open editor"));
   };
 
   const handleReject = () => {
@@ -401,6 +418,16 @@ export function TaskCardDetail({
                       {task.prUrl}
                     </a>
                   </div>
+                )}
+                {task.worktreePath && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="mt-2 h-7 text-xs"
+                    onClick={handleOpenEditor}
+                  >
+                    Open in Editor
+                  </Button>
                 )}
               </div>
             </div>
@@ -607,7 +634,7 @@ export function TaskCardDetail({
                 <Button
                   variant="default"
                   size="sm"
-                  onClick={handleApprove}
+                  onClick={() => handleApprove()}
                   disabled={updateTask.isPending}
                   className="bg-green-600 hover:bg-green-700"
                 >
@@ -675,6 +702,11 @@ export function TaskCardDetail({
           taskId={task.id}
           open={diffOpen}
           onOpenChange={setDiffOpen}
+          reviewMode={task.status === TaskStatus.REVIEW}
+          onApproveWithSelection={(excludedFiles) => {
+            handleApprove(excludedFiles);
+            setDiffOpen(false);
+          }}
         />
       </SheetContent>
     </Sheet>

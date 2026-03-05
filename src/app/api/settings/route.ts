@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { setSetting, getMaxConcurrent } from "@/lib/settings";
+import { setSetting, getSetting, getMaxConcurrent } from "@/lib/settings";
 import { getDispatcher } from "@/lib/dispatcher";
 import { z } from "zod/v4";
 
@@ -10,7 +10,8 @@ const updateSettingSchema = z.object({
 
 export async function GET() {
   const maxConcurrent = await getMaxConcurrent();
-  return NextResponse.json({ maxConcurrent });
+  const editorCommand = await getSetting("editorCommand");
+  return NextResponse.json({ maxConcurrent, editorCommand });
 }
 
 export async function PUT(request: Request) {

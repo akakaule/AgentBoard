@@ -2,6 +2,7 @@ import { prisma } from "./db";
 
 const DEFAULTS: Record<string, string> = {
   maxConcurrent: "2",
+  editorCommand: "code",
 };
 
 export async function getSetting(key: string): Promise<string> {

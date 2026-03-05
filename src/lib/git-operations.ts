@@ -4,7 +4,7 @@ import path from "path";
 export type GitProvider = "github" | "azuredevops";
 
 /** Slugify a task title into a safe branch name segment */
-function slugify(text: string): string {
+export function slugify(text: string): string {
   return text
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
@@ -24,8 +24,20 @@ function run(cmd: string, cwd: string, timeout = 30000): string {
 }
 
 /** Run a git command in the given directory */
-function git(args: string, cwd: string, timeout = 30000): string {
+export function git(args: string, cwd: string, timeout = 30000): string {
   return run(`git ${args}`, cwd, timeout);
+}
+
+function sanitizeCliText(text: string): string {
+  return text.replace(/\r?\n/g, " ").replace(/"/g, '\\"');
+}
+
+function sanitizeIssueId(issueId: string): string {
+  const id = issueId.trim();
+  if (!/^\d+$/.test(id)) {
+    throw new Error(`Invalid issue id: ${issueId}`);
+  }
+  return id;
 }
 
 /**
@@ -50,6 +62,10 @@ export function detectProvider(repoPath: string, override?: string): GitProvider
   return "github";
 }
 
+export function getRemoteUrl(repoPath: string): string {
+  return git("remote get-url origin", repoPath);
+}
+
 export interface WorktreeResult {
   worktreePath: string;
   branchName: string;
@@ -57,7 +73,7 @@ export interface WorktreeResult {
 
 /**
  * Create a git worktree for a task.
- * Worktrees are placed at <repoPath>/.worktrees/<taskId>
+ * Worktrees are placed at <repoPath>/.worktrees/<slug>-<id8>
  */
 export function createWorktreeForTask(
   repoPath: string,
@@ -65,8 +81,9 @@ export function createWorktreeForTask(
   taskTitle: string,
   baseBranch: string
 ): WorktreeResult {
-  const branchName = `task/${slugify(taskTitle)}-${taskId.slice(0, 8)}`;
-  const worktreePath = path.join(repoPath, ".worktrees", taskId);
+  const dirName = `${slugify(taskTitle)}-${taskId.slice(0, 8)}`;
+  const branchName = `task/${dirName}`;
+  const worktreePath = path.join(repoPath, ".worktrees", dirName);
 
   // Fetch latest from remote (best-effort)
   try {
@@ -254,6 +271,126 @@ export function closePullRequest(
   }
 }
 
+export interface RemoteIssue {
+  id: string;
+  title: string;
+  body: string;
+  url: string;
+  state: string;
+  tags: string;
+}
+
+export function listRemoteIssues(
+  repoPath: string,
+  provider: GitProvider,
+  limit = 50
+): RemoteIssue[] {
+  if (provider === "azuredevops") {
+    const wiql = sanitizeCliText(
+      `Select [System.Id] From WorkItems Where [System.WorkItemType] = 'Issue' Order By [System.ChangedDate] DESC`
+    );
+    const queryOutput = run(
+      `az boards query --wiql "${wiql}" --output json`,
+      repoPath,
+      30000
+    );
+    const query = JSON.parse(queryOutput) as { workItems?: Array<{ id: number }> };
+    const ids = (query.workItems || []).slice(0, limit).map((w) => String(w.id));
+    const issues: RemoteIssue[] = [];
+    for (const id of ids) {
+      const raw = run(
+        `az boards work-item show --id ${sanitizeIssueId(id)} --output json`,
+        repoPath,
+        15000
+      );
+      const item = JSON.parse(raw) as {
+        id?: number;
+        fields?: Record<string, unknown>;
+        _links?: { html?: { href?: string } };
+        url?: string;
+      };
+      const fields = item.fields || {};
+      issues.push({
+        id: String(item.id ?? id),
+        title: String(fields["System.Title"] || ""),
+        body: String(fields["System.Description"] || ""),
+        url: item._links?.html?.href || item.url || "",
+        state: String(fields["System.State"] || "Active"),
+        tags: String(fields["System.Tags"] || "").replace(/;/g, ", "),
+      });
+    }
+    return issues;
+  }
+
+  const output = run(
+    `gh issue list --state all --limit ${Math.max(1, Math.min(limit, 200))} --json number,title,body,url,state,labels`,
+    repoPath,
+    30000
+  );
+  const data = JSON.parse(output) as Array<{
+    number: number;
+    title: string;
+    body?: string;
+    url: string;
+    state: string;
+    labels?: Array<{ name?: string }>;
+  }>;
+  return data.map((issue) => ({
+    id: String(issue.number),
+    title: issue.title || "",
+    body: issue.body || "",
+    url: issue.url || "",
+    state: issue.state || "OPEN",
+    tags: (issue.labels || [])
+      .map((l) => l.name || "")
+      .filter(Boolean)
+      .join(", "),
+  }));
+}
+
+export function updateIssueState(
+  repoPath: string,
+  issueId: string,
+  close: boolean,
+  provider: GitProvider
+): void {
+  const id = sanitizeIssueId(issueId);
+  if (provider === "azuredevops") {
+    const state = close ? "Closed" : "Active";
+    run(
+      `az boards work-item update --id ${id} --fields "System.State=${state}" --output json`,
+      repoPath,
+      30000
+    );
+    return;
+  }
+
+  if (close) {
+    run(`gh issue close ${id}`, repoPath, 30000);
+  } else {
+    run(`gh issue reopen ${id}`, repoPath, 30000);
+  }
+}
+
+export function commentOnIssue(
+  repoPath: string,
+  issueId: string,
+  body: string,
+  provider: GitProvider
+): void {
+  const id = sanitizeIssueId(issueId);
+  const safeBody = sanitizeCliText(body);
+  if (provider === "azuredevops") {
+    run(
+      `az boards work-item update --id ${id} --discussion "${safeBody}" --output json`,
+      repoPath,
+      30000
+    );
+    return;
+  }
+  run(`gh issue comment ${id} --body "${safeBody}"`, repoPath, 30000);
+}
+
 // ── Provider-agnostic operations ───────────────────────────────────
 
 /**
@@ -357,6 +494,48 @@ export function getWorktreeDiff(
       return "";
     }
   }
+}
+
+/**
+ * Exclude files from a branch before merging.
+ * Reverts excluded files to their base-branch state, amends the commit,
+ * and force-pushes so the PR reflects the reduced changeset.
+ */
+export function excludeFilesFromBranch(
+  worktreePath: string,
+  branchName: string,
+  baseBranch: string,
+  excludedFiles: string[]
+): void {
+  if (excludedFiles.length === 0) return;
+
+  // Determine the base ref
+  let baseRef = `origin/${baseBranch}`;
+  try {
+    git(`rev-parse --verify "${baseRef}"`, worktreePath);
+  } catch {
+    baseRef = baseBranch;
+  }
+
+  for (const file of excludedFiles) {
+    // Sanitize file path to prevent injection
+    const safeFile = file.replace(/"/g, "");
+    try {
+      // Restore file to base-branch state
+      git(`checkout "${baseRef}" -- "${safeFile}"`, worktreePath);
+    } catch {
+      // File might be new (doesn't exist on base) — remove it
+      try {
+        git(`rm -f "${safeFile}"`, worktreePath);
+      } catch {
+        // File already gone
+      }
+    }
+  }
+
+  git("add -A", worktreePath);
+  git('commit --amend --no-edit', worktreePath);
+  git(`push --force-with-lease origin "${branchName}"`, worktreePath, 60000);
 }
 
 // ── Helpers ────────────────────────────────────────────────────────

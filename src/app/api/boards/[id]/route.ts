@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { z } from "zod/v4";
 import { validateGitRepo } from "@/lib/git-operations";
+import { getWorktreePool } from "@/lib/worktree-pool";
 
 const updateBoardSchema = z.object({
   name: z.string().min(1).optional(),
@@ -47,6 +48,12 @@ export async function PATCH(
       where: { id },
       data,
     });
+
+    // Invalidate worktree pool if repoPath changed
+    if (data.repoPath !== undefined) {
+      getWorktreePool().invalidateBoard(id).catch(() => {});
+    }
+
     return NextResponse.json(board);
   } catch (error) {
     if (error instanceof z.ZodError) {
